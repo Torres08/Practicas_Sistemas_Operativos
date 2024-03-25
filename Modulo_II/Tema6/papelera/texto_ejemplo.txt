@@ -1,0 +1,6 @@
+ejercicio1.c
+ejercicio2.c
+Makefile
+papelera
+temporal
+temporal.txt

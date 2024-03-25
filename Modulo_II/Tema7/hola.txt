@@ -1,0 +1,288 @@
+cliente.c:
+static void mimanejador(int senal)
+{
+  printf("Cliente %d: escribo en el FIFO aun no abierto para lectura\n", getpid());
+  return;
+}
+
+// Funcion que devuelve un descriptor al FIFO a utilizar para imprimir.
+int obtenerfifo(int dfifoe, int dfifos, int mipid)
+{
+
+  int mififo, resultado, pidproxy;
+  char nombrefifoproxy[longnombre];
+
+  // Escribe cualquier cosa en el FIFO conocido del servidor
+  if (!(resultado = write(dfifoe, &mipid, sizeof(int))))
+  {
+    perror("Cliente: error al escribir peticion en fifo conocido del servidor");
+    exit(EXIT_FAILURE);
+  }
+  printf("Cliente %d: escrito pid en fifo conocido del servidor.\n", mipid);
+
+  // Obtiene el pid del proceso proxy con el que se va a comunicar
+  if (!(resultado = read(dfifos, &pidproxy, sizeof(int))))
+  {
+    perror("Cliente: error al leer fifo proxy asignado por servidor");
+    exit(EXIT_FAILURE);
+  }
+  printf("Cliente %d: leido pid %d en fifo de servidor. \n", mipid, pidproxy);
+
+  // Abre el FIFO a utilizar en la comunicacion
+  //sprintf(nombrefifoproxy, "fifo.%d");
+  sprintf(nombrefifoproxy, "./papelera/proxy");
+  printf("Cliente %d: nombre fifo proxy asignado %s\n", mipid, nombrefifoproxy);
+  if ((mififo = open(nombrefifoproxy, O_WRONLY)) == -1)
+  {
+    perror("Cliente: problema al abrir fifo proxy asignado");
+    exit(EXIT_FAILURE);
+  }
+  return (mififo);
+}
+
+void producir(char c, int mififo, int mipid)
+{
+
+  char bufer[tamano];
+  int contador = 0, i = 0, resultado;
+  int numcar;
+
+  // Genera un numero aleatorio entre 1 y 10000, va a ser el numero de caracteres a enviar.
+  srand((unsigned int)mipid);
+  numcar = 1 + (int)(10000.0 * rand() / (RAND_MAX + 1.0));
+  printf("Cliente %d: Numero caracteres %c a generar es %d\n", mipid, c, numcar);
+
+  // Pone el manejador para la senal SIGPIPE.
+  if (signal(SIGPIPE, mimanejador) == SIG_ERR)
+    perror("Cliente: Error configurando senal");
+
+  // Escritura de los datos.
+  while (contador < numcar)
+  {
+    bufer[i] = c;
+    contador++;
+    i++;
+    if ((i == tamano) || (contador == numcar))
+    {
+      sleep((mipid + contador) % 1);
+      if ((resultado = write(mififo, bufer, i)) == -1)
+        perror("ERROR AL ESCRIBIR EN EL FIFO");
+      printf("Cliente %d: He escrito en el fifo %d\n", mipid, resultado);
+      i = 0;
+    }
+  }
+  
+}
+
+int main(int argc, char **argv)
+{
+
+  char c = 'a';
+  int numcli, pid, mipid, i, dfifoe, dfifos, mififo, estado;
+  char nombrefifoe[longnombre], nombrefifos[longnombre];
+
+  setbuf(stdout, NULL);
+  if (argc < 3)
+  {
+    printf("Clientes: Formato: clientes <nombre_fifo> <numero_clientes>\n");
+    exit(EXIT_FAILURE);
+  }
+  else if (((numcli = atoi(argv[2])) > 10) || (numcli < 1))
+  {
+    printf("Clientes: <numero_clientes> comprendido entre 1 y 10\n");
+    exit(EXIT_FAILURE);
+  }
+
+  // Compone los nombres de los FIFOs conocidos a partir del parametro,
+  // uno de entrada y otro de salida (desde el punto de vista del servidor).
+  
+  sprintf(nombrefifoe, "%se", argv[1]);
+  sprintf(nombrefifos, "%ss", argv[1]);
+
+  printf("Clientes: Nombre fifo entrada servidor %s\n", nombrefifoe);
+  printf("Clientes: Nombre fifo salida servidor %s\n", nombrefifos);
+
+  if ((dfifoe = open(nombrefifoe, O_WRONLY)) == -1)
+  {
+    perror("Clientes: Problema con el archivo fifo de entrada al servidor");
+    exit(EXIT_FAILURE);
+  }
+  if ((dfifos = open(nombrefifos, O_RDWR)) == -1)
+  {
+    perror("Clientes: Problema con el archivo fifo de salida del servidor");
+    exit(EXIT_FAILURE);
+  }
+
+  // Crea procesos clientes, con un caracter distinto a imprimir cada uno.
+  for (i = 1; i < numcli; i++)
+  {
+    if ((pid = fork()) == -1)
+    {
+      perror("Clientes: Problema al crear proceso cliente");
+      exit(EXIT_FAILURE);
+    }
+    if (pid == 0)
+    {
+      mipid = getpid();
+      mififo = obtenerfifo(dfifoe, dfifos, mipid);
+      producir(c, mififo, mipid);
+      exit(EXIT_SUCCESS);
+    }
+    else
+      c++;
+  }
+
+  // El propio programa se convierte en un cliente.
+  mipid = getpid();
+  mififo = obtenerfifo(dfifoe, dfifos, mipid);
+  producir(c, mififo, mipid);
+
+  // El proceso original elimina zombies ya que es el padre.
+  while (wait(&estado) != -1)
+    ;
+  exit(EXIT_SUCCESS);
+}
+
+
+proxy.c 
+void imprimir_exclusivo(const char *datos){
+    // 1. abro el archivo temporal
+    int fd_temporal; 
+
+    printf("Proxy (%d): Imprimiendo en pantalla. \n", getpid());
+    
+    if ((fd_temporal = open("./papelera/temporal.txt", O_WRONLY | O_CREAT | O_APPEND, 0666)) < 0){
+        perror("Error al abrir el archivo temporal. \n");
+        exit(EXIT_FAILURE);
+    }
+
+    // 2. escribe los datos en el archivo temporal 
+    // datos es el buffer escritura + bytes_leidos
+    if (write(fd_temporal, datos, sizeof(datos)) < 0){
+        perror("Error al escribir en el archivo temporal. \n");
+        exit(EXIT_FAILURE);
+    }
+
+
+    // 3. cierra el archivo temporal 
+    close(fd_temporal);
+
+    // 4. imprime por pantalla, asegurandose de acceso exclusivo
+    // abro en lectura 
+
+    if ((fd_temporal = open("./papelera/temporal.txt", O_RDONLY)) < 0){
+        perror("Error al abrir el archivo temporal. \n");
+        exit(EXIT_FAILURE);
+    }
+
+    // 5. imprime por pantalla desde el archivo temporal
+    char buffer[1024];
+    ssize_t bytes_leidos;
+
+    while ((bytes_leidos = read(fd_temporal, buffer, sizeof(buffer))) > 0){
+        // escribo en salida estandar
+        write(STDOUT_FILENO, buffer, bytes_leidos);
+    }
+
+
+    // 6. cierro y elimino el archivo temporal 
+    close(fd_temporal);
+    //remove("./papelera/temporal.txt");
+
+}
+
+int main(){
+
+    // mensaje inicio
+    printf("Proxy (%d): Inicio de ejecucion. \n", getpid());
+    
+    // 1. buffer escritura + bytes_leidos
+    char buffer[1024];
+    ssize_t bytes_leidos;
+
+
+    // 2. lee datos del servidor por entrada estandar 
+
+    while ((bytes_leidos = read(STDIN_FILENO, buffer, sizeof(buffer))) > 0){
+        // 3. guarda datos en temporal file
+        // 4. imprime por pantalla, asegurandose de acceso exclusivo
+        imprimir_exclusivo(buffer);
+    }
+
+    return EXIT_SUCCESS;
+}
+
+servidor.c
+// 4. manejador para procesos zombioes -> espera
+void manejador_sigchld(int sig)
+{
+    // 5. espero a que terminen los hijos, -1 espero a cualquiera
+    while (waitpid(-1, NULL, WNOHANG) > 0)
+        ;
+}
+
+// al main no se le pasan argumentos
+int main()
+{
+
+    // 1. voy a crear los FIFOs con mkfifo, se puede crear tambien con el open, asi mejor
+    // lo que le tengo que mandar a cliente es un unico nombre, de forma que los clientes suponen que el 
+    // nombre de FIFO concido de entrada al servidor es dicho nobre concatenado
+    // con el caracter e, el de salida con caracter s
+    mkfifo("fifoe", 0666);
+    mkfifo("fifos", 0666);
+
+    // 2. abro los FIFOs con open
+    int fifo_entrada = open("fifoe", O_RDONLY);
+    int fifo_salida = open("fifos", O_WRONLY);
+
+    // 3. pid _proxy + configurar señal SIGCHILD sigaction
+    struct sigaction sa;
+    sa.sa_handler = manejador_sigchld;
+    sa.sa_flags = SA_RESTART | SA_NOCLDSTOP;
+    sigaction(SIGCHLD, &sa, NULL); // definir el manejador de señales
+
+    int pid_proxy;
+
+    printf("Copisteria abierta\n");
+
+    // 4. bucle del programa
+    while (1)
+    {
+
+        // 5. el servidor recibe solicitud del cliente, leo el fifo_entrada
+        if (read(fifo_entrada, &pid_proxy, sizeof(int)) > 0)
+        {
+            printf("Servidor Copisteria: recibida solicitud de impresion del cliente %d\n", pid_proxy);
+
+            // 6. creo el proceso hijo = proxy, envia datos al proxy
+            int pid = fork();
+            if (pid == 0)
+            {
+                // ejecutamos el proxy
+                printf("Servidor Copisteria: ejecutando proxy ... \n");
+                execlp("./papelera/proxy", "proxy", NULL);
+                perror("Error al ejecutar el proxy");
+                exit(EXIT_FAILURE);
+            }
+            else if (pid > 0)
+            {
+                // 7. caso padre, envio datos al proxy
+                printf("Servidor Copisteria: Enviando datos al proxy ... %d\n", pid_proxy);
+                write(fifo_salida, &pid, sizeof(int));
+            }
+            else
+            {
+                perror("Error al leer FIFO de entrada");
+                exit(EXIT_FAILURE);
+            }
+        }
+    }
+
+    // cerrar FIFOS antes de salir (nunca se ejecuta en este caso)
+    close(fifo_entrada);
+    close(fifo_salida);
+
+    return EXIT_SUCCESS;
+}
+
